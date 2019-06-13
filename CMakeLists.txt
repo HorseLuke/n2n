@@ -48,8 +48,8 @@ endif()
 #message(${N2N_OPTION_AES})
 ## DEBUG FOR CMAKE
 
+# Add SHARED to build DLL
 add_library(n2n n2n.c
-                n2n_keyfile.c
                 edge_utils.c
                 wire.c
                 minilzo.c

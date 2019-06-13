@@ -22,14 +22,8 @@
 
 #include <assert.h>
 
-#if defined(DEBUG)
-#   define PURGE_REGISTRATION_FREQUENCY   60
-#   define REGISTRATION_TIMEOUT          120
-#else /* #if defined(DEBUG) */
-#   define PURGE_REGISTRATION_FREQUENCY   60
-#   define REGISTRATION_TIMEOUT          (60*20)
-#endif /* #if defined(DEBUG) */
-
+#define PURGE_REGISTRATION_FREQUENCY   30
+#define REGISTRATION_TIMEOUT           60
 
 static const uint8_t broadcast_addr[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 static const uint8_t multicast_addr[6] = { 0x01, 0x00, 0x5E, 0x00, 0x00, 0x00 }; /* First 3 bytes are meaningful */
@@ -87,8 +81,8 @@ void traceEvent(int eventTraceLevel, char* file, int line, char * format, ...) {
   va_list va_ap;
 
   if(eventTraceLevel <= traceLevel) {
-    char buf[2048];
-    char out_buf[640];
+    char buf[1024];
+    char out_buf[1280];
     char theDate[N2N_TRACE_DATESIZE];
     char *extra_msg = "";
     time_t theTime = time(NULL);
@@ -269,69 +263,17 @@ void print_n2n_version() {
 
 /* *********************************************** */ 
 
-/** Find the peer entry in list with mac_addr equal to mac.
- *
- *  Does not modify the list.
- *
- *  @return NULL if not found; otherwise pointer to peer entry.
- */
-struct peer_info * find_peer_by_mac(struct peer_info * list, const n2n_mac_t mac)
-{
-  while(list != NULL)
-    {
-      if(0 == memcmp(mac, list->mac_addr, 6))
-        {
-	  return list;
-        }
-      list = list->next;
-    }
-
-  return NULL;
-}
-
-
-/** Return the number of elements in the list.
- *
- */
-size_t peer_list_size(const struct peer_info * list)
-{
-  size_t retval=0;
-
-  while(list)
-    {
-      ++retval;
-      list = list->next;
-    }
-
-  return retval;
-}
-
-/** Add new to the head of list. If list is NULL; create it.
- *
- *  The item new is added to the head of the list. New is modified during
- *  insertion. list takes ownership of new.
- */
-void peer_list_add(struct peer_info * * list,
-		   struct peer_info * newp)
-{
-  newp->next = *list;
-  newp->last_seen = time(NULL);
-  *list = newp;
-}
-
-
-size_t purge_expired_registrations(struct peer_info ** peer_list) {
-  static time_t last_purge = 0;
+size_t purge_expired_registrations(struct peer_info ** peer_list, time_t* p_last_purge) {
   time_t now = time(NULL);
   size_t num_reg = 0;
 
-  if((now - last_purge) < PURGE_REGISTRATION_FREQUENCY) return 0;
+  if((now - (*p_last_purge)) < PURGE_REGISTRATION_FREQUENCY) return 0;
 
   traceEvent(TRACE_INFO, "Purging old registrations");
 
   num_reg = purge_peer_list(peer_list, now-REGISTRATION_TIMEOUT);
 
-  last_purge = now;
+  (*p_last_purge) = now;
   traceEvent(TRACE_INFO, "Remove %ld registrations", num_reg);
 
   return num_reg;
@@ -341,37 +283,16 @@ size_t purge_expired_registrations(struct peer_info ** peer_list) {
 size_t purge_peer_list(struct peer_info ** peer_list,
 		       time_t purge_before)
 {
-  struct peer_info *scan;
-  struct peer_info *prev;
+  struct peer_info *scan, *tmp;
   size_t retval=0;
 
-  scan = *peer_list;
-  prev = NULL;
-  while(scan != NULL)
-    {
-      if(scan->last_seen < purge_before)
-        {
-	  struct peer_info *next = scan->next;
-
-	  if(prev == NULL)
-            {
-	      *peer_list = next;
-            }
-	  else
-            {
-	      prev->next = next;
-            }
-
-	  ++retval;
-	  free(scan);
-	  scan = next;
-        }
-      else
-        {
-	  prev = scan;
-	  scan = scan->next;
-        }
+  HASH_ITER(hh, *peer_list, scan, tmp) {
+    if(scan->last_seen < purge_before) {
+      HASH_DEL(*peer_list, scan);
+      retval++;
+      free(scan);
     }
+  }
 
   return retval;
 }
@@ -379,29 +300,14 @@ size_t purge_peer_list(struct peer_info ** peer_list,
 /** Purge all items from the peer_list and return the number of items that were removed. */
 size_t clear_peer_list(struct peer_info ** peer_list)
 {
-  struct peer_info *scan;
-  struct peer_info *prev;
+  struct peer_info *scan, *tmp;
   size_t retval=0;
 
-  scan = *peer_list;
-  prev = NULL;
-  while(scan != NULL)
-    {
-      struct peer_info *next = scan->next;
-
-      if(prev == NULL)
-        {
-	  *peer_list = next;
-        }
-      else
-        {
-	  prev->next = next;
-        }
-
-      ++retval;
-      free(scan);
-      scan = next;
-    }
+  HASH_ITER(hh, *peer_list, scan, tmp) {
+    HASH_DEL(*peer_list, scan);
+    retval++;
+    free(scan);
+  }
 
   return retval;
 }
@@ -460,27 +366,24 @@ extern char * sock_to_cstr(n2n_sock_str_t out,
   }
 }
 
-/* @return zero if the two sockets are equivalent. */
+/* @return 1 if the two sockets are equivalent. */
 int sock_equal(const n2n_sock_t * a,
 	       const n2n_sock_t * b) {
-  if(a->port != b->port)     { return 1; }
-  if(a->family != b->family) { return 1; }
-  
-  switch(a->family) {
-    case AF_INET:
-      if(0 != memcmp(a->addr.v4, b->addr.v4, IPV4_SIZE)) {
-	return 1;
-      }
-      break;
-      
-    default:
-      if(0 != memcmp(a->addr.v6, b->addr.v6, IPV6_SIZE)) {
-	return 1;
-      }
-      
-      break;
-    }
+  if(a->port != b->port)     { return(0); }
+  if(a->family != b->family) { return(0); }
 
-  return 0;
+  switch(a->family) {
+  case AF_INET:
+    if(memcmp(a->addr.v4, b->addr.v4, IPV4_SIZE))
+      return(0);
+    break;
+  default:
+    if(memcmp(a->addr.v6, b->addr.v6, IPV6_SIZE))
+      return(0);
+    break;
+  }
+
+  /* equal */
+  return(1);
 }
 

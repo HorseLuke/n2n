@@ -151,6 +151,8 @@ typedef struct tuntap_dev {
 #define MSG_TYPE_REGISTER_SUPER_ACK     6
 #define MSG_TYPE_REGISTER_SUPER_NAK     7
 #define MSG_TYPE_FEDERATION             8
+#define MSG_TYPE_PEER_INFO              9
+#define MSG_TYPE_QUERY_PEER            10
 
 /* Set N2N_COMPRESSION_ENABLED to 0 to disable lzo1x compression of ethernet
  * frames. Doing this will break compatibility with the standard n2n packet
@@ -168,71 +170,46 @@ typedef char ipstr_t[32];
 typedef char macstr_t[N2N_MACSTR_SIZE];
 
 struct peer_info {
-  struct peer_info *  next;
-  n2n_community_t     community_name;
   n2n_mac_t           mac_addr;
   n2n_sock_t          sock;
+  int                 timeout;
   time_t              last_seen;
+  time_t              last_p2p;
+  time_t              last_sent_query;
+
+  UT_hash_handle hh; /* makes this structure hashable */
 };
 
-struct n2n_edge; /* defined in edge.c */
-typedef struct n2n_edge         n2n_edge_t;
+#define HASH_ADD_PEER(head,add)                                                \
+    HASH_ADD(hh,head,mac_addr,sizeof(n2n_mac_t),add)
+#define HASH_FIND_PEER(head,mac,out)                                           \
+    HASH_FIND(hh,head,mac,sizeof(n2n_mac_t),out)
 
 #define N2N_EDGE_SN_HOST_SIZE   48
 #define N2N_EDGE_NUM_SUPERNODES 2
 #define N2N_EDGE_SUP_ATTEMPTS   3       /* Number of failed attmpts before moving on to next supernode. */
 #define N2N_PATHNAME_MAXLEN     256
-#define N2N_MAX_TRANSFORMS      16
 #define N2N_EDGE_MGMT_PORT      5644
 
 
 typedef char n2n_sn_name_t[N2N_EDGE_SN_HOST_SIZE];
 
-struct n2n_edge {
-  int                 daemon;                 /**< Non-zero if edge should detach and run in the background. */
-  int                 preferred_aes;          /**< Non-zero if AES is the preferred encryption meothd. */
-  uint8_t             re_resolve_supernode_ip;
-
-  n2n_sock_t          supernode;
-
-  size_t              sn_idx;                 /**< Currently active supernode. */
-  size_t              sn_num;                 /**< Number of supernode addresses defined. */
+typedef struct n2n_edge_conf {
   n2n_sn_name_t       sn_ip_array[N2N_EDGE_NUM_SUPERNODES];
-  int                 sn_wait;                /**< Whether we are waiting for a supernode response. */
-
   n2n_community_t     community_name;         /**< The community. 16 full octets. */
-  char                keyschedule[N2N_PATHNAME_MAXLEN];
-  int                 null_transop;           /**< Only allowed if no key sources defined. */
+  n2n_transform_t     transop_id;             /**< The transop to use. */
+  uint8_t             re_resolve_supernode_ip;
+  uint8_t             dyn_ip_mode;            /**< Interface IP address is dynamically allocated, eg. DHCP. */
+  uint8_t             allow_routing;          /**< Accept packet no to interface address. */
+  uint8_t             drop_multicast;         /**< Multicast ethernet addresses. */
+  uint8_t             sn_num;                 /**< Number of supernode addresses defined. */
+  char                *encrypt_key;
+  int                 register_interval;      /**< Interval for supernode registration, also used for UDP NAT hole punching. */
+  int                 local_port;
+  int                 mgmt_port;
+} n2n_edge_conf_t;
 
-  int                 udp_sock;
-  int                 udp_mgmt_sock;          /**< socket for status info. */
-  int                 udp_multicast_sock;     /**< socket for local multicast registrations. */
-
-  tuntap_dev          device;                 /**< All about the TUNTAP device */
-  int                 dyn_ip_mode;            /**< Interface IP address is dynamically allocated, eg. DHCP. */
-  int                 allow_routing;          /**< Accept packet no to interface address. */
-  int                 drop_multicast;         /**< Multicast ethernet addresses. */
-
-  n2n_trans_op_t      transop[N2N_MAX_TRANSFORMS]; /* one for each transform at fixed positions */
-  size_t              tx_transop_idx;         /**< The transop to use when encoding. */
-  n2n_sock_t          multicast_peer;         /**< Multicast peer group (for local edges) */
-  struct peer_info *  known_peers;            /**< Edges we are connected to. */
-  struct peer_info *  pending_peers;          /**< Edges we have tried to register with. */
-  time_t              last_register_req;      /**< Check if time to re-register with super*/
-  size_t              register_lifetime;      /**< Time distance after last_register_req at which to re-register. */
-  time_t              last_p2p;               /**< Last time p2p traffic was received. */
-  time_t              last_sup;               /**< Last time a packet arrived from supernode. */
-  size_t              sup_attempts;           /**< Number of remaining attempts to this supernode. */
-  n2n_cookie_t        last_cookie;            /**< Cookie sent in last REGISTER_SUPER. */
-
-  time_t              start_time;             /**< For calculating uptime */
-
-  /* Statistics */
-  size_t              tx_p2p;
-  size_t              rx_p2p;
-  size_t              tx_sup;
-  size_t              rx_sup;
-};
+typedef struct n2n_edge n2n_edge_t; /* Opaque, see edge_utils.c */
 
 /* ************************************** */
 
@@ -264,6 +241,13 @@ struct n2n_edge {
 
 /* ************************************** */
 
+/* Transop Init Functions */
+int n2n_transop_null_init(const n2n_edge_conf_t *conf, n2n_trans_op_t *ttt);
+int n2n_transop_twofish_init(const n2n_edge_conf_t *conf, n2n_trans_op_t *ttt);
+#ifdef N2N_HAVE_AES
+int n2n_transop_aes_cbc_init(const n2n_edge_conf_t *conf, n2n_trans_op_t *ttt);
+#endif
+
 /* Log */
 void setTraceLevel(int level);
 void setUseSyslog(int use_syslog);
@@ -271,7 +255,7 @@ int getTraceLevel();
 void traceEvent(int eventTraceLevel, char* file, int line, char * format, ...);
 
 /* Tuntap API */
-int tuntap_open(tuntap_dev *device, char *dev, const char *address_mode, char *device_ip, 
+int tuntap_open(tuntap_dev *device, char *dev, const char *address_mode, char *device_ip,
 			char *device_mask, const char * device_mac, int mtu);
 int tuntap_read(struct tuntap_dev *tuntap, unsigned char *buf, int len);
 int tuntap_write(struct tuntap_dev *tuntap, unsigned char *buf, int len);
@@ -286,48 +270,36 @@ uint8_t is_multi_broadcast(const uint8_t * dest_mac);
 char* msg_type2str(uint16_t msg_type);
 void hexdump(const uint8_t * buf, size_t len);
 void print_n2n_version();
-void supernode2addr(n2n_sock_t * sn, const n2n_sn_name_t addrIn);
 int is_empty_ip_address(const n2n_sock_t * sock);
-const char *random_device_mac(void);
+void print_edge_stats(const n2n_edge_t *eee);
 
 /* Sockets */
 char* sock_to_cstr( n2n_sock_str_t out,
                             const n2n_sock_t * sock );
 SOCKET open_socket(int local_port, int bind_any);
-int sock_equal( const n2n_sock_t * a, 
+int sock_equal( const n2n_sock_t * a,
                        const n2n_sock_t * b );
 
 /* Operations on peer_info lists. */
-struct peer_info * find_peer_by_mac( struct peer_info * list,
-                                     const n2n_mac_t mac );
-void peer_list_add( struct peer_info * * list,
-                      struct peer_info * newp );
-size_t peer_list_size( const struct peer_info * list );
-size_t purge_peer_list( struct peer_info ** peer_list, 
+size_t purge_peer_list( struct peer_info ** peer_list,
                         time_t purge_before );
 size_t clear_peer_list( struct peer_info ** peer_list );
-size_t purge_expired_registrations( struct peer_info ** peer_list );
-void update_peer_address(n2n_edge_t * eee,
-			 uint8_t from_supernode,
-			 const n2n_mac_t mac,
-			 const n2n_sock_t * peer,
-			 time_t when);
+size_t purge_expired_registrations( struct peer_info ** peer_list, time_t* p_last_purge );
+
+/* Edge conf */
+void edge_init_conf_defaults(n2n_edge_conf_t *conf);
+int edge_verify_conf(const n2n_edge_conf_t *conf);
+int edge_conf_add_supernode(n2n_edge_conf_t *conf, const char *ip_and_port);
+const n2n_edge_conf_t* edge_get_conf(const n2n_edge_t *eee);
 
 /* Public functions */
-int edge_init_keyschedule(n2n_edge_t * eee);
-void send_packet2net(n2n_edge_t * eee,
-		     uint8_t *tap_pkt, size_t len);
-int edge_init_encryption(n2n_edge_t * eee, uint8_t *encrypt_pwd, uint32_t encrypt_pwd_len);
-int edge_init_sockets(n2n_edge_t *eee, int udp_local_port, int mgmt_port);
-
-int edge_init(n2n_edge_t * eee);
-void edge_term(n2n_edge_t * eee);
-int run_edge_loop(n2n_edge_t * eee, int *keep_running);
-
+n2n_edge_t* edge_init(const tuntap_dev *dev, const n2n_edge_conf_t *conf, int *rv);
+void edge_term(n2n_edge_t *eee);
+int run_edge_loop(n2n_edge_t *eee, int *keep_running);
 int quick_edge_init(char *device_name, char *community_name,
 		    char *encrypt_key, char *device_mac,
 		    char *local_ip_address,
 		    char *supernode_ip_address_port,
 		    int *keep_on_running);
-  
+
 #endif /* _N2N_H_ */
