@@ -126,8 +126,12 @@ typedef struct ether_hdr ether_hdr_t;
 #include "n2n_wire.h"
 #include "n2n_transforms.h"
 
-/* N2N_IFNAMSIZ is needed on win32 even if dev_name is not used after declaration */
+#ifdef WIN32
+#define N2N_IFNAMSIZ            64
+#else
 #define N2N_IFNAMSIZ            16 /* 15 chars * NULL */
+#endif
+
 #ifndef WIN32
 typedef struct tuntap_dev {
   int           fd;
@@ -160,7 +164,10 @@ typedef struct tuntap_dev {
  * same value if they are to understand each other. */
 #define N2N_COMPRESSION_ENABLED 1
 
-#define DEFAULT_MTU   1400
+#define DEFAULT_MTU   1390
+
+/** Uncomment this to enable the MTU check */
+//#define MTU_ASSERT_VALUE 1500
 
 /** Common type used to hold stringified IP addresses. */
 typedef char ipstr_t[32];
@@ -202,7 +209,9 @@ typedef struct n2n_edge_conf {
   uint8_t             dyn_ip_mode;            /**< Interface IP address is dynamically allocated, eg. DHCP. */
   uint8_t             allow_routing;          /**< Accept packet no to interface address. */
   uint8_t             drop_multicast;         /**< Multicast ethernet addresses. */
+  uint8_t             allow_p2p;              /**< Allow P2P connection */
   uint8_t             sn_num;                 /**< Number of supernode addresses defined. */
+  uint8_t             tos;                    /** TOS for sent packets */
   char                *encrypt_key;
   int                 register_interval;      /**< Interval for supernode registration, also used for UDP NAT hole punching. */
   int                 local_port;

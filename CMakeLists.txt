@@ -2,7 +2,7 @@ project(n2n)
 cmake_minimum_required(VERSION 2.6)
 
 # N2n information
-set(N2N_VERSION 2.5.0)
+set(N2N_VERSION 2.5.1)
 set(N2N_OSNAME ${CMAKE_SYSTEM})
 
 # N2n specific params
@@ -78,9 +78,6 @@ target_link_libraries(edge n2n)
 
 add_executable(supernode sn.c)
 target_link_libraries(supernode n2n)
-
-add_executable(test test.c)
-target_link_libraries(test n2n)
 
 add_executable(benchmark benchmark.c)
 target_link_libraries(benchmark n2n)

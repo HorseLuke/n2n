@@ -1,159 +1,160 @@
 # N2N
 
-Edge node
----------
+N2n is a light VPN software which make it easy to create virtual networks bypassing intermediate firewalls.
 
-You need to start an edge node on each host you want to connect with the *same*
-community.
+In order to start using N2N, two elements are required:
 
-Enable the edge process
+- A *supernode*: it allows edge nodes to announce and discover other nodes. It must have a port publicly accessible on internet.
+
+- *Edge* nodes: the nodes which will be part of the virtual networks
+
+A virtual network shared between multiple edge nodes in n2n is called a *community*. A single supernode can relay multiple communities and a single PC can be part of multiple communities at the same time. An encryption key can be used by the edge nodes to encrypt the packets within their community.
+
+N2n tries to enstablish a direct P2P connection between the edge nodes when possible. When this is not possible (usually due to special NAT devices), the supernode is also used to relay the packets.
+
+Quick Setup
+-----------
+
+Some linux distributions already provide n2n as a package so a simple `sudo apt-get install n2n` will do the work. Alternatively, up to date packages for most distributions are available on [ntop repositories](http://packages.ntop.org/).
+
+On host1 run:
 
 ```sh
-$ sudo ./edge -d n2n0 -c mynetwork -k encryptme -u 99 -g 99 -m 3C:A0:12:34:56:78 -a 1.2.3.4 -l a.b.c.d:xyw
+$ sudo edge -c mynetwork -k mysecretpass -a 192.168.100.1 -f -l supernode.ntop.org:7777
 ```
 
-or
+On host2 run:
 
 ```sh
-$ N2N_KEY=encryptme sudo ./edge -d n2n0 -c mynetwork -u 99 -g 99 -m 3C:A0:12:34:56:78 -a 1.2.3.4 -l a.b.c.d:xyw
+$ sudo edge -c mynetwork -k mysecretpass -a 192.168.100.2 -f -l supernode.ntop.org:7777
 ```
 
-By defaul the edge will run in background but you can use the `-f` option to keep it in foreground.
+Now the two hosts can ping each other.
 
-Windows
--------
+**IMPORTANT** It is strongly adviced to choose a custom community name (-c) and a secret encryption key (-k) in order to prevent other users to connect to your PC. For privacy and to reduce the above server load, it is also suggested to set up a custom supernode as exmplained below.
 
-Check out doc/Windows.md for compilation and run instuctions.
+Setting up a custom Supernode
+-----------------------------
 
-Note that `-d`, `-u`, `-g` and `-f` options are not available for Windows.
+You can create your own infrastructure by setting up a supernode on a public server (e.g. a VPS). You just need to open a single port (1234 in the example below) on your firewall (usually iptables).
 
-Supernode
---------
+1. Install the n2n package
+2. Edit `/etc/n2n/supernode.conf` and add the following:
+```
+-l=1234
+```
+3. Start the supernode service with `sudo systemctl start supernode`
+4. Optionally enable supernode start on boot: `sudo systemctl enable supernode`
 
-You need to start the supernode once (no need to be root unless you want to use a privileged port)
+Now the supernode service should be up and running on port 1234. On your edge nodes you can now specify `-l your_supernode_ip:1234` to use it. All the edge nodes must use the same supernode.
 
-1. `./supernode -l 1234 -v`
+Routing the traffic
+-------------------
 
-Dropping Root Privileges and SUID-Root Executables (UNIX)
---------------------------------------------------
+On linux, n2n provides a standard TAP interface, so routing works gracefully via the standard system utilities as follows.
 
-The edge node uses superuser privileges to create a TAP network interface
-device. Once this is created root privileges are not required and can constitute
-a security hazard if there is some way for an attacker to take control of an
-edge process while it is running. Edge will drop to a non-privileged user if you
-specify the `-u <uid>` and `-g <gid>` options. These are numeric IDs. Consult
-`/etc/passwd`.
+In this example host1 is the edge router (with n2n IP 192.168.100.1), whereas host2 is the client.
 
-You may choose to install edge SUID-root to do this:
+Here is how to configure host1:
 
-1. Become root
-2. `chown root:root edge`
-3. `chmod +s edge`
-4. done
+1. Add the `-r` option to the edge options to enable routing
+2. Enable packet forwarding with `sudo sysctl -w net.ipv4.ip_forward=1`
+3. Possibly configure iptables to `ACCEPT` the packets on the `FORWARD` chain.
 
-Any user can now run edge. You may not want this, but it may be convenient and
-safe if your host has only one login user.
+On host2, run the `edge` program as normal to join the host1 community.
 
+In order to forward all the internet traffic via host2:
 
-Running As a Daemon (UNIX)
---------------------------
+```sh
+# Determine the current gateway (e.g. 192.168.1.1)
+$ ip route show default
 
-Unless given `-f` as a command line option, edge will call daemon(3) after
-successful setup. This causes the process to fork a child which closes stdin,
-stdout and stderr then sets itself as process group leader. When this is done,
-the edge command returns immediately and you will only see the edge process in
-the process listings, eg. from ps or top.
+# Add a route to reach the supernode via such gateway
+$ sudo ip route add supernode.ntop.org via 192.168.1.1
 
-If the edge command returns 0 then the daemon started successfully. If it
-returns non-zero then edge failed to start up for some reason. When edge starts
-running as a daemon, all logging goes to syslog daemon.info facility.
+# Forward all the internet traffic via host1
+$ sudo ip route del default
+$ sudo ip route add default via 192.168.100.1
+```
 
+This process can be greatly simplified by using the [n2n_gateway.sh](https://github.com/ntop/n2n/blob/dev/doc/n2n_gateway.sh) script.
+
+See [Routing.md](https://github.com/ntop/n2n/blob/dev/doc/Routing.md) for other use cases and in depth explanation.
+
+Manual Compilation
+------------------
+
+On linux, compilation from source is straight forward:
+
+```sh
+./autogen.sh
+./configure
+make
+
+# optionally install
+make install
+```
+
+For Windows, check out [Windows.md](doc/Windows.md) for compilation and run instuctions.
+
+For MacOS, check out [n2n_on_MacOS.txt](https://github.com/ntop/n2n/blob/dev/doc/n2n_on_MacOS.txt).
+
+Running edge as a service
+-------------------------
+
+edge can also be run as a service instead of cli:
+
+1. Edit `/etc/n2n/edge` with your custom options. See `/etc/n2n/edge.conf.sample`.
+2. Start the service: `sudo systemctl start edge`
+3. Optionally enable edge start on boot: `sudo systemctl enable edge`
+
+You can run multiple edge service instances by creating `/etc/n2n/edge-instance1` and
+starting it with `sudo systemctl start edge@instance1`.
 
 IPv6 Support
 ------------
 
-n2n supports the carriage of IPv6 packets within the n2n tunnel. N2n does not
-yet use IPv6 for transport between edges and supernodes.
+N2n can tunnel IPv6 traffic into the virtual network but does not support
+IPv6 for edge-to-supernode communication yet.
 
-To make IPv6 carriage work you need to manually add IPv6 addresses to the TAP
-interfaces at each end. There is currently no way to specify an IPv6 address on
-the edge command line.
+Check out [IPv6.md](https://github.com/ntop/n2n/blob/dev/doc/IPv6.md) for more information.
 
-eg. under linux:
+Security considerations
+-----------------------
 
-on hostA:
-`[hostA] $ /sbin/ip -6 addr add fc00:abcd:1234::7/48 dev n2n0`
+n2n edge nodes use twofish encryption by default for compatibility reasons with existing versions.
 
-on hostB:
-`[hostB] $ /sbin/ip -6 addr add fc00​:abcd:​1234::6/48 dev n2n0`
+**IMPORTANT** Encryption is only applied to the packet payload. Some metadata like the virtual MAC address
+of the edge nodes, their IP address and the community are sent in cleartext.
 
-You may find it useful to make use of tunctl from the uml-utilities
-package. Tunctl allow you to bring up a TAP interface and configure addressing
-prior to starting edge. It also allows edge to be restarted without the
-interface closing (which would normally affect routing tables).
+When encryption is enabled, the supernode will not be able to decrypt the traffic exchanged between
+two edge nodes, but it will now that edge A is talking with edge B.
 
-Once the IPv6 addresses are configured and edge started, IPv6 neighbor discovery
-packets flow (get broadcast) and IPv6 entities self arrange. Test your IPv6
-setup with ping6 - the IPv6 ping command.
+Recently AES encryption support has been implemented, which increases both security and performance,
+so it is recommended to enable it on all the edge nodes by specifying the `-A` option.
 
+A benchmark of the encryption methods is available when compiled from source with `./benchmark`.
 
-Performance Notes
------------------
+Contribution
+------------
 
-The time taken to perform a ping test for various ciphers is given below:
+You can contribute to n2n in variuos ways:
 
-Test: `ping -f -l 8 -s 800 -c 10000 <far_edge>`
+- Update an [open issue](https://github.com/ntop/n2n/issues) or create a new one with detailed information
+- Propose new features
+- Improve the documentation
+- Provide pull requests with enhancenents
 
-AES  (-O0) 11820
-TF   (-O0) 25761
+For details about the internals of n2n check out [Hacking guide](https://github.com/ntop/n2n/blob/dev/doc/HACKING).
 
-TF   (-O2) 20554
+Related Projects
+----------------
 
-AES  (-O3) 12532
-TF   (-O3) 14046
-NULL (-O3) 10659
+Here is a list of third-party projects connected to this repository.
 
-# N2N Builder (Supernode Docker Image based on Debian)
-
-## Running the supernode image
-
-```sh
-$ docker run --rm -d -p 5645:5645/udp -p 7654:7654/udp supermock/supernode:[TAGNAME]
-```
-
-## Binary packages
-If you don't like to compile from source, we build stable and nightly builds that you can find at [packages.ntop.org](http://packages.ntop.org).
-
-## Docker registry
-
-- [DockerHub](https://hub.docker.com/r/supermock/supernode/)
-- [DockerStore](https://store.docker.com/community/images/supermock/supernode/)
-
-## Documentation
-
-### 1. Build image and binaries
-
-Use `make` command to build the images. Before starting the arm32v7 platform build, you need to run this registry, so you can perform a cross-build. Just follow the documentation: https://github.com/multiarch/qemu-user-static/blob/master/README.md
-
-```sh
-$ TARGET_ARCHITECTURE=[arm32v7, x86_64, (nothing to build all architectures)] make
-```
-
-### 2. Push it
-
-Use `make push` command to push the image, TARGET_ARCHITECTURE is necessary.
-
-```sh
-$ TARGET_ARCHITECTURE=[arm32v7, x86_64] make push
-```
-
-### 3. Test it
-
-Once the image is built, it's ready to run:
-
-```sh
-$ docker run --rm -d -p 5645:5645/udp -p 7654:7654/udp supermock/supernode:[TAGNAME]
-```
+- N2n for android: [hin2n](https://github.com/switch-iot/hin2n)
+- N2n v1 and v2 version from meyerd: [meyerd n2n](https://github.com/meyerd/n2n)
+- Docker images: [DockerHub](https://hub.docker.com/r/supermock/supernode/) - [DockerStore](https://store.docker.com/community/images/supermock/supernode/)
 
 -----------------
-(C) 2007-2018 - ntop.org and contributors
+(C) 2007-2019 - ntop.org and contributors

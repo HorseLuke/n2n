@@ -789,7 +789,7 @@ static int setOption(int optkey, char *_optarg, n2n_sn_t *sss) {
     break;
 
   case 'v': /* verbose */
-    setTraceLevel(4); /* DEBUG */
+    setTraceLevel(getTraceLevel() + 1);
     break;
 
   default:
@@ -944,9 +944,12 @@ static void dump_registrations(int signo) {
 
 static int keep_running;
 
-#ifdef __linux__
-
-static void term_handler(int sig) {
+#ifdef WIN32
+BOOL WINAPI term_handler(DWORD sig)
+#else
+static void term_handler(int sig)
+#endif
+{
   static int called = 0;
 
   if(called) {
@@ -958,8 +961,10 @@ static void term_handler(int sig) {
   }
 
   keep_running = 0;
-}
+#ifdef WIN32
+  return(TRUE);
 #endif
+}
 
 /* *************************************************** */
 
@@ -993,6 +998,11 @@ int main(int argc, char * const argv[]) {
   }
 #endif /* #if defined(N2N_HAVE_DAEMON) */
 
+#ifndef WIN32
+  if((getuid() == 0) || (getgid() == 0))
+    traceEvent(TRACE_WARNING, "Running as root is discouraged");
+#endif
+
   traceEvent(TRACE_DEBUG, "traceLevel is %d", getTraceLevel());
 
   sss_node.sock = open_socket(sss_node.lport, 1 /*bind ANY*/);
@@ -1016,6 +1026,9 @@ int main(int argc, char * const argv[]) {
   signal(SIGTERM, term_handler);
   signal(SIGINT, term_handler);
   signal(SIGHUP, dump_registrations);
+#endif
+#ifdef WIN32
+  SetConsoleCtrlHandler(term_handler, TRUE);
 #endif
 
   keep_running = 1;
